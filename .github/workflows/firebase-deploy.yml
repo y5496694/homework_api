@@ -2,14 +2,11 @@
 
 name: Deploy to Firebase Functions
 
-# 이 워크플로우가 언제 실행될지 정의합니다.
 # 'main' 브랜치에 push 이벤트가 발생했을 때 실행됩니다.
 on:
   push:
     branches:
-      - main # main 브랜치 대신 master 등 다른 브랜치 이름을 사용하신다면 수정해주세요.
-    paths:
-      - 'functions/**' # functions 폴더 내의 파일이 변경되었을 때만 실행
+      - main
 
 jobs:
   deploy_functions:
@@ -19,11 +16,10 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v3
 
-      # 2. functions 폴더로 이동하여 npm 패키지를 설치합니다.
-      - name: Install dependencies for functions
-        run: |
-          cd functions
-          npm install
+      # 2. 프로젝트의 부품(npm 패키지)을 설치합니다.
+      # (기존 'cd functions' 명령어를 제거하여 루트에서 바로 실행)
+      - name: Install dependencies
+        run: npm install
 
       # 3. Firebase에 배포합니다.
       - name: Deploy to Firebase
@@ -35,5 +31,5 @@ jobs:
           args: --only functions # functions만 배포합니다.
         env:
           # 서비스 계정 정보를 환경 변수로 설정합니다.
-          # GitHub Secrets에 저장된 서비스 계정 키를 사용합니다.
           FIREBASE_credentials: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_MANSUNGCOIN_C6E06 }}
+

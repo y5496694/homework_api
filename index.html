@@ -1,0 +1,218 @@
+import React, { useState, useEffect, useRef } from 'react';
+import { initializeApp } from 'firebase/app';
+import { getFirestore, collection, onSnapshot, query, orderBy } from 'firebase/firestore';
+import { getFunctions, httpsCallable } from 'firebase/functions';
+import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, signOut } from 'firebase/auth';
+
+// 사용자께서 제공한 Firebase 설정 정보입니다.
+const firebaseConfig = {
+  apiKey: "AIzaSyDCeJPDQUNi-KmJ9DhkTRIu-9t2PGZCpt0",
+  authDomain: "mansungcoin-c6e06.firebaseapp.com",
+  projectId: "mansungcoin-c6e06",
+  storageBucket: "mansungcoin-c6e06.appspot.com",
+  messagingSenderId: "704809284946",
+  appId: "1:704809284946:web:3e71d98f38810577e1768b"
+};
+
+// Firebase 서비스 초기화
+const app = initializeApp(firebaseConfig);
+const db = getFirestore(app);
+const functions = getFunctions(app, 'asia-northeast3');
+const auth = getAuth(app);
+
+// 로딩 스피너 컴포넌트
+const Spinner = () => (
+    <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-white"></div>
+);
+
+// 로그인 화면 컴포넌트
+const LoginScreen = ({ onLogin, authError }) => {
+    const [email, setEmail] = useState('');
+    const [password, setPassword] = useState('');
+    const [isLoggingIn, setIsLoggingIn] = useState(false);
+
+    const handleLogin = async (e) => {
+        e.preventDefault();
+        setIsLoggingIn(true);
+        await onLogin(email, password);
+        setIsLoggingIn(false);
+    };
+
+    return (
+        <div className="flex items-center justify-center min-h-screen bg-gray-50">
+            <div className="w-full max-w-md p-8 space-y-6 bg-white rounded-xl shadow-lg">
+                <h2 className="text-3xl font-bold text-center text-gray-900">대시보드 로그인</h2>
+                <p className="text-center text-sm text-gray-600">교사 계정으로 로그인해주세요.</p>
+                <form className="space-y-6" onSubmit={handleLogin}>
+                    <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="이메일" required className="w-full px-4 py-3 text-gray-700 bg-gray-100 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500" />
+                    <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="비밀번호" required className="w-full px-4 py-3 text-gray-700 bg-gray-100 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500" />
+                    {authError && <p className="text-sm text-red-600 text-center">{authError}</p>}
+                    <button type="submit" disabled={isLoggingIn} className="w-full flex justify-center py-3 px-4 text-white bg-blue-600 hover:bg-blue-700 rounded-lg font-semibold transition duration-300 disabled:bg-blue-400">
+                        {isLoggingIn ? <Spinner /> : '로그인'}
+                    </button>
+                </form>
+            </div>
+        </div>
+    );
+};
+
+// 메인 대시보드 컴포넌트
+const Dashboard = ({ user, onLogout }) => {
+  const [codes, setCodes] = useState([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [isVerifying, setIsVerifying] = useState(false);
+  const [generatedCode, setGeneratedCode] = useState(null);
+  const [apiResult, setApiResult] = useState(null); // API 호출 결과를 위한 통합 상태
+  const [dbError, setDbError] = useState(null);
+  const verificationCodeInput = useRef(null);
+
+  useEffect(() => {
+    if (!user) return;
+    setIsLoading(true);
+    const q = query(collection(db, "proofCodes"), orderBy("issuedAt", "desc"));
+    const unsubscribe = onSnapshot(q, (querySnapshot) => {
+      const codesData = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data(), issuedAt: doc.data().issuedAt?.toDate(), usedAt: doc.data().usedAt?.toDate() }));
+      setCodes(codesData);
+      setDbError(null);
+      setIsLoading(false);
+    }, (error) => {
+      console.error("데이터 수신 오류:", error);
+      if (error.code === 'permission-denied') {
+        setDbError("데이터베이스 접근 권한이 없습니다. 로그인한 계정이 '교사' 역할인지, Firestore 보안 규칙이 올바른지 확인해주세요.");
+      } else {
+        setDbError("데이터를 불러오는 중 오류가 발생했습니다.");
+      }
+      setIsLoading(false);
+    });
+    return () => unsubscribe();
+  }, [user]);
+
+  const handleGenerateCode = async () => {
+    setIsGenerating(true);
+    setGeneratedCode(null);
+    setApiResult(null);
+    try {
+      const generateCodeFunction = httpsCallable(functions, 'generateCode');
+      const result = await generateCodeFunction();
+      setGeneratedCode(result.data.code);
+    } catch (error) {
+      console.error("코드 생성 API 호출 오류:", error);
+      let message = "코드 생성 중 오류가 발생했습니다.";
+      if (error.code === 'internal') {
+        message = "서버 내부 오류입니다. Firebase 프로젝트의 Blaze 요금제 활성화 및 함수 재배포 여부를 확인해주세요.";
+      } else if (error.code === 'unauthenticated') {
+        message = "인증되지 않은 사용자입니다. 함수를 호출할 권한이 없습니다. 다시 로그인해주세요.";
+      }
+      setApiResult({ success: false, message });
+      setGeneratedCode("생성 실패");
+    }
+    setIsGenerating(false);
+  };
+
+  const handleVerifyCode = async () => {
+    const codeToVerify = verificationCodeInput.current.value;
+    if (!codeToVerify) {
+      setApiResult({ success: false, message: "코드를 입력하세요." });
+      return;
+    }
+    setIsVerifying(true);
+    setApiResult(null);
+    try {
+      const verifyCodeFunction = httpsCallable(functions, 'verifyCode');
+      const result = await verifyCodeFunction({ code: codeToVerify });
+      setApiResult(result.data);
+    } catch (error) {
+      console.error("코드 검증 API 호출 오류:", error);
+      let message = "API 호출 중 오류가 발생했습니다.";
+      if (error.code === 'internal') {
+        message = "서버 내부 오류입니다. Firebase 프로젝트의 Blaze 요금제 활성화 및 함수 재배포 여부를 확인해주세요.";
+      } else if (error.code === 'invalid-argument') {
+        message = "입력한 코드의 형식이 올바르지 않습니다.";
+      } else if (error.code === 'unauthenticated') {
+        message = "인증되지 않은 사용자입니다. 함수를 호출할 권한이 없습니다.";
+      }
+      setApiResult({ success: false, message });
+    }
+    setIsVerifying(false);
+    verificationCodeInput.current.value = "";
+  };
+  
+  const formatTimestamp = (ts) => ts ? new Intl.DateTimeFormat('ko-KR', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }).format(ts) : 'N/A';
+
+  return (
+    <div className="bg-gray-50 min-h-screen font-sans text-gray-800">
+      <div className="container mx-auto p-4 sm:p-6 lg:p-8">
+        <header className="mb-8 flex justify-between items-center">
+          <div>
+            <h1 className="text-4xl font-bold text-gray-900 tracking-tight">숙제 증명 코드 대시보드</h1>
+            <p className="text-gray-600 mt-2">발급된 코드의 현황을 실시간으로 확인하고 API를 테스트합니다.</p>
+          </div>
+          <button onClick={onLogout} className="bg-red-500 hover:bg-red-600 text-white font-bold py-2 px-4 rounded-lg transition duration-300">로그아웃</button>
+        </header>
+        
+        {dbError && <div className="bg-red-100 border-l-4 border-red-500 text-red-700 p-4 mb-6" role="alert"><p className="font-bold">데이터베이스 오류</p><p>{dbError}</p></div>}
+        
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
+          <div className="bg-white p-6 rounded-xl shadow-md">
+            <h2 className="text-xl font-semibold mb-4">1. 코드 발급 API 테스트</h2>
+            <button onClick={handleGenerateCode} disabled={isGenerating} className="w-full bg-blue-500 hover:bg-blue-600 text-white font-bold py-3 px-4 rounded-lg transition duration-300 ease-in-out disabled:bg-blue-300 flex items-center justify-center">{isGenerating ? <Spinner /> : '새로운 증명 코드 발급받기'}</button>
+            {generatedCode && <div className="mt-4 p-4 bg-blue-50 rounded-lg text-center"><p className="text-gray-600">발급된 코드:</p><p className={`text-3xl font-bold tracking-widest ${generatedCode === '생성 실패' ? 'text-red-500' : 'text-blue-600'}`}>{generatedCode}</p></div>}
+          </div>
+          <div className="bg-white p-6 rounded-xl shadow-md">
+            <h2 className="text-xl font-semibold mb-4">2. 코드 사용 API 테스트</h2>
+            <div className="flex gap-2">
+              <input ref={verificationCodeInput} type="text" placeholder="증명 코드 입력" className="flex-grow p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-transparent" />
+              <button onClick={handleVerifyCode} disabled={isVerifying} className="bg-green-500 hover:bg-green-600 text-white font-bold py-3 px-4 rounded-lg transition duration-300 ease-in-out disabled:bg-green-300 flex items-center justify-center">{isVerifying ? <Spinner /> : '사용하기'}</button>
+            </div>
+          </div>
+        </div>
+        
+        {apiResult && <div className={`my-4 p-3 rounded-lg text-center text-sm font-medium ${apiResult.success ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}>{apiResult.message}</div>}
+        
+        <div className="bg-white rounded-xl shadow-md overflow-hidden">
+           <h2 className="text-xl font-semibold p-6">전체 코드 발급 내역</h2>
+           <div className="overflow-x-auto">
+            <table className="w-full text-sm text-left text-gray-500">
+              <thead className="text-xs text-gray-700 uppercase bg-gray-100"><tr><th scope="col" className="px-6 py-3">코드</th><th scope="col" className="px-6 py-3">상태</th><th scope="col" className="px-6 py-3">발급 시각</th><th scope="col" className="px-6 py-3">사용 시각</th></tr></thead>
+              <tbody>
+                {isLoading ? (<tr><td colSpan="4" className="text-center p-8"><div className="flex justify-center items-center"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500"></div><span className="ml-4">데이터를 불러오는 중...</span></div></td></tr>) : codes.length === 0 && !dbError ? (<tr><td colSpan="4" className="text-center p-8">발급된 코드가 없습니다. '코드 발급' 버튼을 눌러 테스트해보세요.</td></tr>) : (codes.map(code => (<tr key={code.id} className="bg-white border-b hover:bg-gray-50"><td className="px-6 py-4 font-mono font-bold text-gray-900 tracking-wider">{code.code}</td><td className="px-6 py-4"><span className={`px-3 py-1 text-xs font-semibold rounded-full ${code.status === 'valid' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}>{code.status === 'valid' ? '유효' : '사용됨'}</span></td><td className="px-6 py-4">{formatTimestamp(code.issuedAt)}</td><td className="px-6 py-4">{formatTimestamp(code.usedAt)}</td></tr>)))}
+              </tbody>
+            </table>
+           </div>
+        </div>
+        <footer className="text-center mt-8 text-sm text-gray-500"><p>Proof Code System by Gemini & Firebase</p></footer>
+      </div>
+    </div>
+  );
+}
+
+// 최상위 앱 컴포넌트
+export default function App() {
+    const [user, setUser] = useState(null);
+    const [authReady, setAuthReady] = useState(false);
+    const [authError, setAuthError] = useState(null);
+
+    useEffect(() => {
+        const unsubscribe = onAuthStateChanged(auth, (user) => { setUser(user); setAuthReady(true); });
+        return () => unsubscribe();
+    }, []);
+
+    const handleLogin = async (email, password) => {
+        try {
+            await signInWithEmailAndPassword(auth, email, password);
+            setAuthError(null);
+        } catch (error) {
+            console.error("로그인 오류:", error.code);
+            if (error.code === 'auth/wrong-password' || error.code === 'auth/user-not-found' || error.code === 'auth/invalid-credential') {
+                setAuthError("이메일 또는 비밀번호가 올바르지 않습니다.");
+            } else {
+                setAuthError("로그인 중 오류가 발생했습니다.");
+            }
+        }
+    };
+
+    const handleLogout = async () => { await signOut(auth); };
+    if (!authReady) { return <div className="flex items-center justify-center min-h-screen"><div className="animate-spin rounded-full h-16 w-16 border-b-4 border-blue-500"></div></div>; }
+    return user ? <Dashboard user={user} onLogout={handleLogout} /> : <LoginScreen onLogin={handleLogin} authError={authError} />;
+}

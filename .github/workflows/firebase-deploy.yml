@@ -20,14 +20,13 @@ jobs:
       - name: Install dependencies
         run: npm install
 
-      # 3. Firebase에 배포합니다. (오류 수정된 부분)
+      # 3. Firebase에 배포합니다. (시크릿 이름 오류 수정)
       - name: Deploy to Firebase
         uses: w9jds/firebase-action@master
         with:
-          # 'action', 'project' 등의 항목을 제거하고,
-          # 모든 명령어를 'args'에 통합합니다.
           args: deploy --only functions --project mansungcoin-c6e06
         env:
-          # 서비스 계정 정보는 그대로 사용합니다.
-          FIREBASE_credentials: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_MANSUNGCOIN_C6E06 }}
+          # GitHub에 저장된 시크릿 이름을 정확히 사용하도록 수정합니다.
+          # 선생님께서 만드신 'FIREBASE_JSON'을 사용합니다.
+          GCP_SA_KEY: ${{ secrets.FIREBASE_JSON }}
 
